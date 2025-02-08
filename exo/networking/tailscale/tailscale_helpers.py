@@ -123,3 +123,15 @@ async def get_tailscale_devices(api_key: str, tailnet: str) -> Dict[str, Device]
         devices[device.name] = device
 
       return devices
+
+async def create_tailscale_api_key(client_id: str, client_secret: str) -> str:
+  async with aiohttp.ClientSession() as session:
+    url = "https://api.tailscale.com/api/v2/oauth/token"
+    data = {
+      "client_id": client_id,
+      "client_secret": client_secret
+    }
+    async with session.post(url, data=data) as response:
+      response.raise_for_status()
+      r = await response.json()
+      return r["access_token"], r["expires_in"]

@@ -6,7 +6,7 @@ from exo.networking.discovery import Discovery
 from exo.networking.peer_handle import PeerHandle
 from exo.topology.device_capabilities import DeviceCapabilities, device_capabilities, UNKNOWN_DEVICE_CAPABILITIES
 from exo.helpers import DEBUG, DEBUG_DISCOVERY
-from .tailscale_helpers import get_device_id, update_device_attributes, get_device_attributes, get_tailscale_devices, Device
+from .tailscale_helpers import get_device_id, update_device_attributes, get_device_attributes, get_tailscale_devices, Device, create_tailscale_api_key
 
 
 class TailscaleDiscovery(Discovery):
@@ -15,11 +15,12 @@ class TailscaleDiscovery(Discovery):
     node_id: str,
     node_port: int,
     create_peer_handle: Callable[[str, str, str, DeviceCapabilities], PeerHandle],
+    tailscale_client_id: str,
+    tailscale_client_secret: str,
     discovery_interval: int = 5,
     discovery_timeout: int = 30,
     update_interval: int = 15,
     device_capabilities: DeviceCapabilities = UNKNOWN_DEVICE_CAPABILITIES,
-    tailscale_api_key: str = None,
     tailnet: str = None,
     allowed_node_ids: List[str] = None,
   ):
@@ -33,10 +34,12 @@ class TailscaleDiscovery(Discovery):
     self.known_peers: Dict[str, Tuple[PeerHandle, float, float]] = {}
     self.discovery_task = None
     self.cleanup_task = None
-    self.tailscale_api_key = tailscale_api_key
+    self.tailscale_client_id = tailscale_client_id
+    self.tailscale_client_secret = tailscale_client_secret
     self.tailnet = tailnet
     self.allowed_node_ids = allowed_node_ids
     self._device_id = None
+    self._tailscale_api_key = (0, None)
     self.update_task = None
 
   async def start(self):
@@ -64,12 +67,22 @@ class TailscaleDiscovery(Discovery):
     return self._device_id
 
   async def update_device_posture_attributes(self):
-    await update_device_attributes(await self.get_device_id(), self.tailscale_api_key, self.node_id, self.node_port, self.device_capabilities)
+    try:
+      await update_device_attributes(await self.get_device_id(), await self.tailscale_api_key(), self.node_id, self.node_port, self.device_capabilities)
+    except Exception as e:
+      self.invalidate_tailscale_api_key()
+      if "403" in str(e):
+        if DEBUG_DISCOVERY >= 1:
+          print("Warning: Insufficient permissions to update device attributes in Tailscale. " 
+                "This may affect peer discovery. Please ensure your OAuth Client has write permissions.")
+      else:
+        print(f"Error updating device posture attributes: {e}")
+        print(traceback.format_exc())
 
   async def task_discover_peers(self):
     while True:
       try:
-        devices: dict[str, Device] = await get_tailscale_devices(self.tailscale_api_key, self.tailnet)
+        devices: dict[str, Device] = await get_tailscale_devices(await self.tailscale_api_key(), self.tailnet)
         current_time = time.time()
 
         active_devices = {name: device for name, device in devices.items() if device.last_seen is not None and (current_time - device.last_seen.timestamp()) < 30}
@@ -81,7 +94,7 @@ class TailscaleDiscovery(Discovery):
         for device in active_devices.values():
           if device.name == self.node_id: continue
           peer_host = device.addresses[0]
-          peer_id, peer_port, device_capabilities = await get_device_attributes(device.device_id, self.tailscale_api_key)
+          peer_id, peer_port, device_capabilities = await get_device_attributes(device.device_id, await self.tailscale_api_key())
           if not peer_id:
             if DEBUG_DISCOVERY >= 4: print(f"{device.device_id} does not have exo node attributes. skipping.")
             continue
@@ -112,6 +125,7 @@ class TailscaleDiscovery(Discovery):
       except Exception as e:
         print(f"Error in discover peers: {e}")
         print(traceback.format_exc())
+        self.invalidate_tailscale_api_key()
       finally:
         await asyncio.sleep(self.discovery_interval)
 
@@ -160,6 +174,7 @@ class TailscaleDiscovery(Discovery):
       except Exception as e:
         print(f"Error in cleanup peers: {e}")
         print(traceback.format_exc())
+        self.invalidate_tailscale_api_key()
       finally:
         await asyncio.sleep(self.discovery_interval)
 
@@ -172,7 +187,17 @@ class TailscaleDiscovery(Discovery):
       health_ok = await peer_handle.health_check()
     except Exception as e:
       if DEBUG_DISCOVERY >= 2: print(f"Error checking peer {peer_id}: {e}")
+      self.invalidate_tailscale_api_key()
       return True
 
     should_remove = ((not is_connected and current_time - connected_at > self.discovery_timeout) or (current_time - last_seen > self.discovery_timeout) or (not health_ok))
     return should_remove
+
+  def invalidate_tailscale_api_key(self):
+    self._tailscale_api_key = (0, None)
+
+  async def tailscale_api_key(self):
+    if not self._tailscale_api_key[1] or self._tailscale_api_key[0] - time.time() < 60:
+      _key, _expires_in = await create_tailscale_api_key(self.tailscale_client_id, self.tailscale_client_secret)
+      self._tailscale_api_key = (_key, time.time() + _expires_in)
+    return self._tailscale_api_key[0]

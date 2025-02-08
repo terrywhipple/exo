@@ -38,6 +38,12 @@ model_cards = {
        "TinygradDynamicShardInferenceEngine": "unsloth/Llama-3.2-3B-Instruct",
     },
   },
+  "llama-3.2-3b-u": {
+    "layers": 28,
+    "repo": {
+       "MLXDynamicShardInferenceEngine": "mlx-community/Hermes-3-Llama-3.2-3B-bf16",
+    },
+  },
   "llama-3.2-3b-bf16": {
     "layers": 28,
     "repo": {

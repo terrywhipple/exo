@@ -86,7 +86,8 @@ parser.add_argument("--disable-tui", action=argparse.BooleanOptionalAction, help
 parser.add_argument("--run-model", type=str, help="Specify a model to run directly")
 parser.add_argument("--prompt", type=str, help="Prompt for the model when using --run-model", default="Who are you?")
 parser.add_argument("--default-temp", type=float, help="Default token sampling temperature", default=0.0)
-parser.add_argument("--tailscale-api-key", type=str, default=None, help="Tailscale API key")
+parser.add_argument("--tailscale-client-id", type=str, default=None, help="Tailscale client ID. Generate here with write all permissions: https://login.tailscale.com/admin/settings/oauth")
+parser.add_argument("--tailscale-client-secret", type=str, default=None, help="Tailscale client secret. Generate here with write all permissions: https://login.tailscale.com/admin/settings/oauth")
 parser.add_argument("--tailnet-name", type=str, default=None, help="Tailnet name")
 parser.add_argument("--node-id-filter", type=str, default=None, help="Comma separated list of allowed node IDs (only for UDP and Tailscale discovery)")
 parser.add_argument("--interface-type-filter", type=str, default=None, help="Comma separated list of allowed interface types (only for UDP discovery)")
@@ -141,8 +142,9 @@ elif args.discovery_module == "tailscale":
     args.node_id,
     args.node_port,
     lambda peer_id, address, description, device_capabilities: GRPCPeerHandle(peer_id, address, description, device_capabilities),
+    args.tailscale_client_id,
+    args.tailscale_client_secret,
     discovery_timeout=args.discovery_timeout,
-    tailscale_api_key=args.tailscale_api_key,
     tailnet=args.tailnet_name,
     allowed_node_ids=allowed_node_ids
   )
@@ -216,6 +218,14 @@ def throttled_broadcast(shard: Shard, event: RepoProgressEvent):
   if last_event and last_event[0] == event.status and current_time - last_event[0] < 0.2: return
   last_events[shard.model_id] = (current_time, event)
   asyncio.create_task(node.broadcast_opaque_status("", json.dumps({"type": "download_progress", "node_id": node.id, "progress": event.to_dict()})))
+  if args.disable_tui:
+    try:
+      terminal_width = os.get_terminal_size().columns
+      progress_width = max(min(terminal_width - 30, 50), 10)  # Leave space for numbers and brackets
+      filled = int(event.downloaded_bytes / event.total_bytes * progress_width)
+      print(f"\r[" + "█" * filled + " " * (progress_width - filled) + f"] ({event.downloaded_bytes/1e9:.2f}/{event.total_bytes/1e9:.2f} GB) {event.downloaded_bytes/event.total_bytes*100:.1f}%", end='', flush=True)
+    except:
+      if DEBUG >= 2: traceback.print_exc()
 shard_downloader.on_progress.register("broadcast").on_next(throttled_broadcast)
 
 async def run_model_cli(node: Node, model_name: str, prompt: str):
@@ -239,6 +249,7 @@ async def run_model_cli(node: Node, model_name: str, prompt: str):
     tokens = []
     def on_token(_request_id, _tokens, _is_finished):
       tokens.extend(_tokens)
+      if args.disable_tui: print(tokenizer.decode(_tokens), end='', flush=True)
       return _request_id == request_id and _is_finished
     await callback.wait(on_token, timeout=300)
 
