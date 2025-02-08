@@ -199,5 +199,5 @@ class TailscaleDiscovery(Discovery):
   async def tailscale_api_key(self):
     if not self._tailscale_api_key[1] or self._tailscale_api_key[0] - time.time() < 60:
       _key, _expires_in = await create_tailscale_api_key(self.tailscale_client_id, self.tailscale_client_secret)
-      self._tailscale_api_key = (_key, time.time() + _expires_in)
-    return self._tailscale_api_key[0]
+      self._tailscale_api_key = (time.time() + _expires_in, _key)
+    return self._tailscale_api_key[1]
