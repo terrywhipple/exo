@@ -198,6 +198,13 @@ async def linux_device_capabilities() -> DeviceCapabilities:
       flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
     )
   elif Device.DEFAULT == "AMD":
+    # temp workaround for unified memory boxes
+    return DeviceCapabilities(
+      model=f"Linux Box (Device: {Device.DEFAULT})",
+      chip=f"Unknown Chip (Device: {Device.DEFAULT})",
+      memory=psutil.virtual_memory().total // 2**20,
+      flops=DeviceFlops(fp32=0, fp16=0, int8=0),
+    )
     # For AMD GPUs, pyrsmi is the way (Official python package for rocm-smi)
     from pyrsmi import rocml
 
